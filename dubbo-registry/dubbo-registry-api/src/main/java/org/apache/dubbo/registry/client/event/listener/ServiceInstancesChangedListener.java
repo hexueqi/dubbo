@@ -49,6 +49,7 @@ import static org.apache.dubbo.common.constants.CommonConstants.REMOTE_METADATA_
 import static org.apache.dubbo.common.constants.RegistryConstants.REGISTRY_CLUSTER_KEY;
 import static org.apache.dubbo.metadata.MetadataInfo.DEFAULT_REVISION;
 import static org.apache.dubbo.registry.client.metadata.ServiceInstanceMetadataUtils.getExportedServicesRevision;
+import static org.apache.dubbo.rpc.Constants.ID_KEY;
 
 /**
  * The Service Discovery Changed {@link EventListener Event Listener}
@@ -75,7 +76,7 @@ public class ServiceInstancesChangedListener implements ConditionalEventListener
     public ServiceInstancesChangedListener(Set<String> serviceNames, ServiceDiscovery serviceDiscovery) {
         this.serviceNames = serviceNames;
         this.serviceDiscovery = serviceDiscovery;
-        this.registryId = serviceDiscovery.getUrl().getParameter("id");
+        this.registryId = serviceDiscovery.getUrl().getParameter(ID_KEY);
         this.listeners = new HashMap<>();
         this.allInstances = new HashMap<>();
         this.serviceUrls = new HashMap<>();
@@ -97,7 +98,7 @@ public class ServiceInstancesChangedListener implements ConditionalEventListener
 
         Map<String, List<ServiceInstance>> revisionToInstances = new HashMap<>();
         Map<String, Set<String>> localServiceToRevisions = new HashMap<>();
-        Map<Set<String>, List<URL>> revisionsToUrls = new HashMap();
+        Map<Set<String>, List<URL>> revisionsToUrls = new HashMap<>();
         Map<String, List<URL>> tmpServiceUrls = new HashMap<>();
         for (Map.Entry<String, List<ServiceInstance>> entry : allInstances.entrySet()) {
             List<ServiceInstance> instances = entry.getValue();
@@ -116,8 +117,6 @@ public class ServiceInstancesChangedListener implements ConditionalEventListener
                     logger.info("MetadataInfo for instance " + instance.getAddress() + "?revision=" + revision + " is " + metadata);
                     if (metadata != null) {
                         revisionToMetadata.put(revision, metadata);
-                    } else {
-
                     }
                 }
 
@@ -125,18 +124,11 @@ public class ServiceInstancesChangedListener implements ConditionalEventListener
                     parseMetadata(revision, metadata, localServiceToRevisions);
                     ((DefaultServiceInstance) instance).setServiceMetadata(metadata);
                 }
-//                else {
-//                    logger.error("Failed to load service metadata for instance " + instance);
-//                    Set<String> set = localServiceToRevisions.computeIfAbsent(url.getServiceKey(), k -> new TreeSet<>());
-//                    set.add(revision);
-//                }
             }
 
             localServiceToRevisions.forEach((serviceKey, revisions) -> {
                 List<URL> urls = revisionsToUrls.get(revisions);
-                if (urls != null) {
-                    tmpServiceUrls.put(serviceKey, urls);
-                } else {
+                if (urls == null) {
                     urls = new ArrayList<>();
                     for (String r : revisions) {
                         for (ServiceInstance i : revisionToInstances.get(r)) {
@@ -144,8 +136,8 @@ public class ServiceInstancesChangedListener implements ConditionalEventListener
                         }
                     }
                     revisionsToUrls.put(revisions, urls);
-                    tmpServiceUrls.put(serviceKey, urls);
                 }
+                tmpServiceUrls.put(serviceKey, urls);
             });
         }
 
@@ -167,10 +159,10 @@ public class ServiceInstancesChangedListener implements ConditionalEventListener
         String metadataType = ServiceInstanceMetadataUtils.getMetadataStorageType(instance);
         // FIXME, check "REGISTRY_CLUSTER_KEY" must be set by every registry implementation.
         instance.getExtendParams().putIfAbsent(REGISTRY_CLUSTER_KEY, RegistryClusterIdentifier.getExtension(url).consumerKey(url));
-        MetadataInfo metadataInfo;
+        MetadataInfo metadataInfo = null;
         try {
             if (logger.isDebugEnabled()) {
-                logger.info("Instance " + instance.getAddress() + " is using metadata type " + metadataType);
+                logger.debug("Instance " + instance.getAddress() + " is using metadata type " + metadataType);
             }
             if (REMOTE_METADATA_STORAGE_TYPE.equals(metadataType)) {
                 RemoteMetadataServiceImpl remoteMetadataService = MetadataUtils.getRemoteMetadataService();
@@ -180,22 +172,17 @@ public class ServiceInstancesChangedListener implements ConditionalEventListener
                 metadataInfo = metadataServiceProxy.getMetadataInfo(ServiceInstanceMetadataUtils.getExportedServicesRevision(instance));
             }
             if (logger.isDebugEnabled()) {
-                logger.info("Metadata " + metadataInfo.toString());
+                logger.debug("Metadata " + metadataInfo.toString());
             }
         } catch (Exception e) {
             logger.error("Failed to load service metadata, metadata type is " + metadataType, e);
-            metadataInfo = null;
             // TODO, load metadata backup. Stop getting metadata after x times of failure for one revision?
         }
         return metadataInfo;
     }
 
     private void notifyAddressChanged() {
-        listeners.forEach((key, notifyListeners) -> {
-            notifyListeners.forEach(notifyListener -> {
-                notifyListener.notify(toUrlsWithEmpty(serviceUrls.get(key)));
-            });
-        });
+        listeners.forEach((key, notifyListeners) -> notifyListeners.forEach(notifyListener -> notifyListener.notify(toUrlsWithEmpty(serviceUrls.get(key)))));
     }
 
     private List<URL> toUrlsWithEmpty(List<URL> urls) {

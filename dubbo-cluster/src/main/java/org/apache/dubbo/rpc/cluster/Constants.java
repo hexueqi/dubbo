@@ -99,4 +99,10 @@ public interface Constants {
      * The key name for export URL in register center
      */
     String EXPORT_KEY = "export";
+    /**
+     * prefix of arguments router key
+     */
+    String ARGUMENTS = "arguments";
+
+    String SHOULD_FAIL_FAST_KEY = "dubbo.router.should-fail-fast";
 }

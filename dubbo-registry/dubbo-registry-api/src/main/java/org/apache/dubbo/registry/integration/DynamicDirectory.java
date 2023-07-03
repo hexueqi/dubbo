@@ -19,6 +19,7 @@ package org.apache.dubbo.registry.integration;
 import org.apache.dubbo.common.URL;
 import org.apache.dubbo.common.URLBuilder;
 import org.apache.dubbo.common.Version;
+import org.apache.dubbo.common.config.ConfigurationUtils;
 import org.apache.dubbo.common.extension.ExtensionLoader;
 import org.apache.dubbo.common.logger.Logger;
 import org.apache.dubbo.common.logger.LoggerFactory;
@@ -33,6 +34,7 @@ import org.apache.dubbo.rpc.Protocol;
 import org.apache.dubbo.rpc.RpcException;
 import org.apache.dubbo.rpc.cluster.Cluster;
 import org.apache.dubbo.rpc.cluster.Configurator;
+import org.apache.dubbo.rpc.cluster.Constants;
 import org.apache.dubbo.rpc.cluster.RouterChain;
 import org.apache.dubbo.rpc.cluster.RouterFactory;
 import org.apache.dubbo.rpc.cluster.directory.AbstractDirectory;
@@ -94,23 +96,32 @@ public abstract class DynamicDirectory<T> extends AbstractDirectory<T> implement
 
     protected ServiceInstancesChangedListener serviceListener;
 
+    /**
+     * Should continue route if directory is empty
+     */
+    private final boolean shouldFailFast;
+
     public DynamicDirectory(Class<T> serviceType, URL url) {
         super(url, true);
+
         if (serviceType == null) {
             throw new IllegalArgumentException("service type is null.");
         }
 
-        shouldRegister = !ANY_VALUE.equals(url.getServiceInterface()) && url.getParameter(REGISTER_KEY, true);
-        shouldSimplified = url.getParameter(SIMPLIFIED_KEY, false);
         if (url.getServiceKey() == null || url.getServiceKey().length() == 0) {
             throw new IllegalArgumentException("registry serviceKey is null.");
         }
+
+        this.shouldRegister = !ANY_VALUE.equals(url.getServiceInterface()) && url.getParameter(REGISTER_KEY, true);
+        this.shouldSimplified = url.getParameter(SIMPLIFIED_KEY, false);
+
         this.serviceType = serviceType;
         this.serviceKey = super.getConsumerUrl().getServiceKey();
 
         this.overrideDirectoryUrl = this.directoryUrl = turnRegistryUrlToConsumerUrl(url);
         String group = directoryUrl.getParameter(GROUP_KEY, "");
         this.multiGroup = group != null && (ANY_VALUE.equals(group) || group.contains(","));
+        this.shouldFailFast = Boolean.parseBoolean(ConfigurationUtils.getProperty(Constants.SHOULD_FAIL_FAST_KEY, "true"));
     }
 
     @Override
@@ -127,6 +138,7 @@ public abstract class DynamicDirectory<T> extends AbstractDirectory<T> implement
                 .clearParameters()
                 .addParameters(queryMap)
                 .removeParameter(MONITOR_KEY)
+                .addMethodParameters(URL.toMethodParameters(queryMap)) // reset method parameters
                 .build();
     }
 
@@ -158,7 +170,7 @@ public abstract class DynamicDirectory<T> extends AbstractDirectory<T> implement
 
     @Override
     public List<Invoker<T>> doList(Invocation invocation) {
-        if (forbidden) {
+        if (forbidden && shouldFailFast) {
             // 1. No service provider 2. Service providers are disabled
             throw new RpcException(RpcException.FORBIDDEN_EXCEPTION, "No provider available from registry " +
                     getUrl().getAddress() + " for service " + getConsumerUrl().getServiceKey() + " on consumer " +
@@ -234,8 +246,9 @@ public abstract class DynamicDirectory<T> extends AbstractDirectory<T> implement
         }
         // unsubscribe.
         try {
-            if (getConsumerUrl() != null && registry != null && registry.isAvailable()) {
-                registry.unsubscribe(getConsumerUrl(), this);
+            if (getSubscribeConsumerurl() != null && registry != null && registry.isAvailable()) {
+                // overwrite by child, so need call function
+                unSubscribe(getSubscribeConsumerurl());
             }
         } catch (Throwable t) {
             logger.warn("unexpected error when unsubscribe service " + serviceKey + "from registry" + registry.getUrl(), t);
